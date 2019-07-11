@@ -10,7 +10,7 @@ import shlex
 from pathlib import Path
 from typing import List
 
-from tqdm import tqdm
+from tqdm import tqdmgit
 
 class CompressionType(Enum):
     GZIP = 1
@@ -96,6 +96,7 @@ def upload_datasets(datasets_path: Path, library_name: str, dbkey: str, parsec_c
         # ]
         upload_dataset_id = json.loads(upload_details)[0]['id']
         # TODO: wait for 'ok' state before renaming
+        # use: parsec libraries wait_for_dataset [OPTIONS] LIBRARY_ID DATASET_ID
         print(f"renaming to {dataset_name}")
         rename_library_item(upload_dataset_id, dataset_name, parsec_cmd)
     # no need to return anything when we are done uploading
