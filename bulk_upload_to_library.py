@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 
 import argparse
+import asyncio
+from dataclasses import dataclass
 from enum import Enum
 import json
 import os
@@ -10,6 +12,7 @@ import shlex
 from pathlib import Path
 from typing import List
 
+import bioblend
 from tqdm import tqdm
 
 
@@ -67,7 +70,25 @@ def wait_for_dataset(library_id: str, dataset_id: str, parsec_cmd: str = 'parsec
     safe_run(cmd_str, 'wait_for_dataset')
 
 
-def upload_datasets(datasets_path: Path, library_name: str, dbkey: str, parsec_cmd='parsec') -> None:
+@dataclass
+class rename_info:
+    library_id: str
+    dataset_id: str
+    new_name: str
+
+
+async def dataset_renamer(queue: asyncio.Queue, parsec_cmd: str = 'parsec') -> None:
+    while True:
+        (info) = await queue.get()
+        # wait for Galaxy to process it before renaming it
+        wait_for_dataset(info.library_id, info.dataset_id)
+        rename_library_item(info.dataset_id, info.new_name, parsec_cmd)
+        queue.task_done()
+
+
+async def upload_datasets(datasets_path: Path, library_name: str, dbkey: str, num_workers: int = 2, parsec_cmd = 'parsec') -> None:
+    queue = asyncio.Queue()
+    workers = [asyncio.create_task(dataset_renamer(queue, parsec_cmd)) for _ in range(num_workers)]
     if not datasets_path.exists() or not datasets_path.is_dir():
         raise IOError(f'path {datasets_path} must be a directory')
     library_id = create_library(library_name, parsec_cmd)
@@ -100,9 +121,11 @@ def upload_datasets(datasets_path: Path, library_name: str, dbkey: str, parsec_c
         #     }
         # ]
         upload_dataset_id = json.loads(upload_details)[0]['id']
-        # wait for Galaxy to process it before renaming it
-        wait_for_dataset(library_id, upload_dataset_id)
-        rename_library_item(upload_dataset_id, dataset_name, parsec_cmd)
+        await queue.put(rename_info(library_id, upload_dataset_id, dataset_name))
+    print("waiting on renaming to finish")
+    await queue.join()
+    for worker in workers:
+        worker.cancel()
     # no need to return anything when we are done uploading
 
 
@@ -113,4 +136,4 @@ if __name__ == '__main__':
     parser.add_argument('library_name', help='Library name to create')
     parser.add_argument('datasets_path', action=readable_dir, help='Directory path containing fastq files to upload')
     args = parser.parse_args()
-    upload_datasets(Path(args.datasets_path), args.library_name, args.dbkey, args.parsec_cmd)
+    asyncio.run(upload_datasets(Path(args.datasets_path), args.library_name, args.dbkey, 2, args.parsec_cmd))
